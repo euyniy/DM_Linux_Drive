@@ -4,6 +4,7 @@
 #include "SerialPort.h"
 #include <vector>
 #include <unordered_map>
+#include <iomanip>
 
 namespace damiao
 {
@@ -93,8 +94,9 @@ public:
   }
 
   void enable(id_t id) { control_cmd(id, 0xFC); }
-  void reset(id_t id) { control_cmd(id, 0xFD); }
+  void disbale(id_t id) { control_cmd(id, 0xFD); }
   void zero_position(id_t id) { control_cmd(id, 0xFE); }
+  void reset(id_t id) { control_cmd(id, 0xFB); }
 
   void control(id_t id, float kp, float kd, float q, float dq, float tau)
   {
@@ -130,6 +132,13 @@ public:
     data_buf[5] = kd_uint >> 4;
     data_buf[6] = ((kd_uint & 0xf) << 4) | ((tau_uint >> 8) & 0xf);
     data_buf[7] = tau_uint & 0xff;
+    // print_data buf
+
+    std::cout << "Data Buffer: ";
+    for (const auto& data : data_buf) {
+      std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data) << " ";
+    }
+    std::cout << std::endl;
 
     send_data.modify(id, data_buf.data());
     serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Fream));
@@ -165,23 +174,26 @@ public:
       m->state.q = uint_to_float(q_uint, m->Q_MIN, m->Q_MAX, 16);
       m->state.dq = uint_to_float(dq_uint, -m->DQ_MAX, m->DQ_MAX, 12);
       m->state.tau = uint_to_float(tau_uint, -m->TAU_MAX, m->TAU_MAX, 12);
-      
       return;
     } 
     else if (recv_data.CMD == 0x01) // Receive fail
     {
+      std::cout << "Receive fail" << std::endl;
       /* code */
     } 
     else if (recv_data.CMD == 0x02) // Send fail
     {
+      std::cout << "Send fail" << std::endl;
       /* code */
     } 
     else if (recv_data.CMD == 0x03) // Send success
     {
+      std::cout << "Send success" << std::endl;
       /* code */
     }
     else if (recv_data.CMD == 0xEE) // Communication error
     {
+      std::cout << "Communication error" << std::endl;
       /* code */
     }
   }
