@@ -13,35 +13,35 @@ namespace damiao
 typedef struct
 {
   uint8_t freamHeader;
-  uint8_t CMD;// 命令 0x00: 心跳 
-              //     0x01: receive fail 0x11: receive success 
-              //     0x02: send fail 0x12: send success
-              //     0x03: set baudrate fail 0x13: set baudrate success
-              //     0xEE: communication error 此时格式段为错误码
-              //           8: 超压 9: 欠压 A: 过流 B: MOS过温 C: 电机线圈过温 D: 通讯丢失 E: 过载
-  uint8_t canDataLen: 6; // 数据长度
-  uint8_t canIde: 1; // 0: 标准帧 1: 扩展帧
-  uint8_t canRtr: 1; // 0: 数据帧 1: 远程帧
-  uint32_t CANID; // 电机反馈的ID
+  uint8_t CMD;// Command 0x00: Heartbeat
+              //         0x01: Receive fail 0x11: Receive success
+              //         0x02: Send fail 0x12: Send success
+              //         0x03: Set baudrate fail 0x13: Set baudrate success
+              //         0xEE: Communication error, error code in the data field
+              //               8: Overvoltage 9: Undervoltage A: Overcurrent B: MOS overtemperature C: Motor coil overtemperature D: Communication loss E: Overload
+  uint8_t canDataLen: 6; // Data length
+  uint8_t canIde: 1; // 0: Standard frame 1: Extended frame
+  uint8_t canRtr: 1; // 0: Data frame 1: Remote frame
+  uint32_t CANID; // Motor feedback ID
   uint8_t canData[8];
-  uint8_t freamEnd; // 帧尾
+  uint8_t freamEnd; // Frame end
 } CAN_Recv_Fream;
 
 typedef struct 
 {
-  uint8_t freamHeader[2] = {0x55, 0xAA}; // 帧头
-  uint8_t freamLen = 0x1e; // 帧长
-  uint8_t CMD = 0x01; // 命令 1：转发CAN数据帧 2：PC与设备握手，设备反馈OK 3: 非反馈CAN转发，不反馈发送状态
-  uint32_t sendTimes = 1; // 发送次数
-  uint32_t timeInterval = 10; // 时间间隔
-  uint8_t IDType = 0; // ID类型 0：标准帧 1：扩展帧
-  uint32_t CANID; // CAN ID 使用电机ID作为CAN ID
-  uint8_t frameType = 0; // 帧类型 0： 数据帧 1：远程帧
-  uint8_t len = 0x08; // len
+  uint8_t freamHeader[2] = {0x55, 0xAA}; // Frame header
+  uint8_t freamLen = 0x1e; // Frame length
+  uint8_t CMD = 0x01; // Command 1: Forward CAN data frame 2: PC and device handshake, device feedback OK 3: Non-feedback CAN forwarding, do not feedback send status
+  uint32_t sendTimes = 1; // Number of sends
+  uint32_t timeInterval = 10; // Time interval
+  uint8_t IDType = 0; // ID type 0: Standard frame 1: Extended frame
+  uint32_t CANID; // CAN ID, use motor ID as CAN ID
+  uint8_t frameType = 0; // Frame type 0: Data frame 1: Remote frame
+  uint8_t len = 0x08; // Length
   uint8_t idAcc;
   uint8_t dataAcc;
   uint8_t data[8];
-  uint8_t crc; // 未解析，任意值
+  uint8_t crc; // Unparsed, any value
 
   void modify(const id_t id, const uint8_t* send_data)
   {
@@ -77,9 +77,9 @@ typedef struct
 } MotorParam;
 
 /**
- * @brief 达妙科技 DM-J4310-2EC 电机控制
+ * @brief Damiao Technology DM-J4310-2EC Motor Control
  * 
- * 使用USB转CAN进行通信，linux做虚拟串口
+ * Communication using USB to CAN, virtual serial port on Linux
  */
 class Motor
 {
@@ -98,7 +98,7 @@ public:
 
   void control(id_t id, float kp, float kd, float q, float dq, float tau)
   {
-    // 位置、速度和扭矩采用线性映射的关系将浮点型数据转换成有符号的定点数据
+    // Position, velocity, and torque are converted from floating-point data to signed fixed-point data using linear mapping
     static auto float_to_uint = [](float x, float xmin, float xmax, uint8_t bits) -> uint16_t {
       float span = xmax - xmin;
       float data_norm = (x - xmin) / span;
@@ -113,7 +113,7 @@ public:
 
     auto& m = motors[id];
 
-    m->cmd = {kp, kd, q, dq, tau}; // 保存控制命令
+    m->cmd = {kp, kd, q, dq, tau}; // Save control command
 
     uint16_t kp_uint = float_to_uint(kp, 0, 500, 12);
     uint16_t kd_uint = float_to_uint(kd, 0, 5, 12);
@@ -140,7 +140,7 @@ public:
   {
     serial_->recv((uint8_t*)&recv_data, 0xAA, sizeof(CAN_Recv_Fream)); 
 
-    if(recv_data.CMD == 0x11 && recv_data.freamEnd == 0x55) // receive success
+    if(recv_data.CMD == 0x11 && recv_data.freamEnd == 0x55) // Receive success
     { 
       static auto uint_to_float = [](uint16_t x, float xmin, float xmax, uint8_t bits) -> float {
         float span = xmax - xmin;
@@ -168,19 +168,19 @@ public:
       
       return;
     } 
-    else if (recv_data.CMD == 0x01) // receive fail
+    else if (recv_data.CMD == 0x01) // Receive fail
     {
       /* code */
     } 
-    else if (recv_data.CMD == 0x02) // send fail
+    else if (recv_data.CMD == 0x02) // Send fail
     {
       /* code */
     } 
-    else if (recv_data.CMD == 0x03) // send success
+    else if (recv_data.CMD == 0x03) // Send success
     {
       /* code */
     }
-    else if (recv_data.CMD == 0xEE) // communication error
+    else if (recv_data.CMD == 0xEE) // Communication error
     {
       /* code */
     }
@@ -189,10 +189,10 @@ public:
   std::unordered_map<id_t, std::shared_ptr<MotorParam>> motors;
 
   /**
-   * @brief 添加电机
+   * @brief Add motor
    * 
-   * 实现不同的MOTOR_ID和MASTER_ID都指向同一个MotorParam
-   * 确保MOTOR_ID和MASTER_ID都未使用
+   * Implement different MOTOR_ID and MASTER_ID pointing to the same MotorParam
+   * Make sure MOTOR_ID and MASTER_ID are not used
    */
   void addMotor(id_t MOTOR_ID, id_t MASTER_ID)
   {
