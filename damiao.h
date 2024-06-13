@@ -52,8 +52,6 @@ typedef struct
 } CAN_Send_Frame;
 
 #pragma pack()
-
-
 typedef struct 
 {
   float Q_MIN = -12.5;
@@ -132,6 +130,15 @@ public:
     auto& m = motors[id];
 
     m->cmd = {kp, kd, q, dq, tau}; // Save control command
+
+
+    // according to the manual, having kd=0 while controlling position will cause oscillation
+    // setting kd serves as a damping factor
+    if ((kp != 0) && (kd == 0)) 
+    {
+      std::cout << "kd should not be 0 when controlling position!" << std::endl;
+      return;
+    }
 
     uint16_t kp_uint = float_to_uint(kp, 0, 500, 12);
     uint16_t kd_uint = float_to_uint(kd, 0, 5, 12);
