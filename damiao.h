@@ -13,7 +13,7 @@ namespace damiao
 
 typedef struct
 {
-  uint8_t freamHeader;
+  uint8_t frameheader;
   uint8_t CMD;// Command 0x00: Heartbeat
               //         0x01: Receive fail 0x11: Receive success
               //         0x02: Send fail 0x12: Send success
@@ -25,13 +25,13 @@ typedef struct
   uint8_t canRtr: 1; // 0: Data frame 1: Remote frame
   uint32_t CANID; // Motor feedback ID
   uint8_t canData[8];
-  uint8_t freamEnd; // Frame end
-} CAN_Recv_Fream;
+  uint8_t FrameEnd; // Frame end
+} CAN_Recv_Frame;
 
 typedef struct 
 {
-  uint8_t freamHeader[2] = {0x55, 0xAA}; // Frame header
-  uint8_t freamLen = 0x1e; // Frame length
+  uint8_t frameHeader[2] = {0x55, 0xAA}; // Frame header
+  uint8_t frameLen = 0x1e; // Frame length
   uint8_t CMD = 0x01; // Command 1: Forward CAN data frame 2: PC and device handshake, device feedback OK 3: Non-feedback CAN forwarding, do not feedback send status
   uint32_t sendTimes = 1; // Number of sends
   uint32_t timeInterval = 10; // Time interval
@@ -49,7 +49,7 @@ typedef struct
     CANID = id;
     std::copy(send_data, send_data+8, data);
   }
-} CAN_Send_Fream;
+} CAN_Send_Frame;
 
 #pragma pack()
 
@@ -73,6 +73,8 @@ typedef struct
     float q;
     float dq;
     float tau;
+    float t_mos;
+    float t_rotor;
   } state;
 
 } MotorParam;
@@ -97,6 +99,20 @@ public:
   void disbale(id_t id) { control_cmd(id, 0xFD); }
   void zero_position(id_t id) { control_cmd(id, 0xFE); }
   void reset(id_t id) { control_cmd(id, 0xFB); }
+
+  std::unordered_map<id_t, std::shared_ptr<MotorParam>> motors;
+
+  /**
+   * @brief Add motor
+   * 
+   * Implement different MOTOR_ID and MASTER_ID pointing to the same MotorParam
+   * Make sure MOTOR_ID and MASTER_ID are not used
+   */
+  void addMotor(id_t MOTOR_ID, id_t MASTER_ID)
+  {
+    motors.insert({MOTOR_ID, std::make_shared<MotorParam>()});
+    motors[MASTER_ID] = motors[MOTOR_ID];
+  }
 
   void control(id_t id, float kp, float kd, float q, float dq, float tau)
   {
@@ -124,15 +140,14 @@ public:
     uint16_t tau_uint = float_to_uint(tau, -m->TAU_MAX, m->TAU_MAX, 12);
 
     std::array<uint8_t, 8> data_buf;
-    data_buf[0] = (q_uint >> 8) & 0xff;
-    data_buf[1] = q_uint & 0xff;
-    data_buf[2] = dq_uint >> 4;
-    data_buf[3] = ((dq_uint & 0xf) << 4) | ((kp_uint >> 8) & 0xf);
-    data_buf[4] = kp_uint & 0xff;
-    data_buf[5] = kd_uint >> 4;
-    data_buf[6] = ((kd_uint & 0xf) << 4) | ((tau_uint >> 8) & 0xf);
-    data_buf[7] = tau_uint & 0xff;
-    // print_data buf
+    data_buf[0] = (q_uint >> 8) & 0xff;                             // p_des
+    data_buf[1] = q_uint & 0xff;                                    // p_des
+    data_buf[2] = dq_uint >> 4;                                     // v_des
+    data_buf[3] = ((dq_uint & 0xf) << 4) | ((kp_uint >> 8) & 0xf);  // v_des + kp
+    data_buf[4] = kp_uint & 0xff;                                   // kp
+    data_buf[5] = kd_uint >> 4;                                     // kd
+    data_buf[6] = ((kd_uint & 0xf) << 4) | ((tau_uint >> 8) & 0xf); // kd + t_ff
+    data_buf[7] = tau_uint & 0xff;                                  // t_ff
 
     std::cout << "Data Buffer: ";
     for (const auto& data : data_buf) {
@@ -141,15 +156,15 @@ public:
     std::cout << std::endl;
 
     send_data.modify(id, data_buf.data());
-    serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Fream));
+    serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Frame));
     this->recv();
   }
 
   void recv()
   {
-    serial_->recv((uint8_t*)&recv_data, 0xAA, sizeof(CAN_Recv_Fream)); 
+    serial_->recv((uint8_t*)&recv_data, 0xAA, sizeof(CAN_Recv_Frame)); 
 
-    if(recv_data.CMD == 0x11 && recv_data.freamEnd == 0x55) // Receive success
+    if(recv_data.CMD == 0x11 && recv_data.FrameEnd == 0x55) // Receive success
     { 
       static auto uint_to_float = [](uint16_t x, float xmin, float xmax, uint8_t bits) -> float {
         float span = xmax - xmin;
@@ -163,6 +178,8 @@ public:
       uint16_t q_uint = (uint16_t(data[1]) << 8) | data[2];
       uint16_t dq_uint = (uint16_t(data[3]) << 4) | (data[4] >> 4);
       uint16_t tau_uint = (uint16_t(data[4] & 0xf) << 8) | data[5];
+      uint16_t t_mos = (uint16_t(data[6]));
+      uint16_t t_rotor = (uint16_t(data[7]));
 
       if(motors.find(recv_data.CANID) == motors.end())
       {
@@ -174,42 +191,26 @@ public:
       m->state.q = uint_to_float(q_uint, m->Q_MIN, m->Q_MAX, 16);
       m->state.dq = uint_to_float(dq_uint, -m->DQ_MAX, m->DQ_MAX, 12);
       m->state.tau = uint_to_float(tau_uint, -m->TAU_MAX, m->TAU_MAX, 12);
+      m->state.t_mos = t_mos;
+      m->state.t_rotor = t_rotor;
       return;
     } 
     else if (recv_data.CMD == 0x01) // Receive fail
     {
       std::cout << "Receive fail" << std::endl;
-      /* code */
     } 
     else if (recv_data.CMD == 0x02) // Send fail
     {
       std::cout << "Send fail" << std::endl;
-      /* code */
     } 
     else if (recv_data.CMD == 0x03) // Send success
     {
       std::cout << "Send success" << std::endl;
-      /* code */
     }
     else if (recv_data.CMD == 0xEE) // Communication error
     {
       std::cout << "Communication error" << std::endl;
-      /* code */
     }
-  }
-
-  std::unordered_map<id_t, std::shared_ptr<MotorParam>> motors;
-
-  /**
-   * @brief Add motor
-   * 
-   * Implement different MOTOR_ID and MASTER_ID pointing to the same MotorParam
-   * Make sure MOTOR_ID and MASTER_ID are not used
-   */
-  void addMotor(id_t MOTOR_ID, id_t MASTER_ID)
-  {
-    motors.insert({MOTOR_ID, std::make_shared<MotorParam>()});
-    motors[MASTER_ID] = motors[MOTOR_ID];
   }
 
 private:
@@ -217,14 +218,14 @@ private:
   {
     std::array<uint8_t, 8> data_buf = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, cmd};
     send_data.modify(id, data_buf.data());
-    serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Fream));
+    serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Frame));
     usleep(1000);
     recv();
   }
 
   SerialPort::SharedPtr serial_;
-  CAN_Send_Fream send_data;
-  CAN_Recv_Fream recv_data;
+  CAN_Send_Frame send_data;
+  CAN_Recv_Frame recv_data;
 };
 
 }; // namespace damiao
