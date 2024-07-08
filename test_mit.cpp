@@ -47,8 +47,8 @@ void print_motor_state(int id)
 int main(int argc , char** argv)
 {
 
-  dm->addMotor(0x01, 0x11);
-  dm->addMotor(0x02, 0x12);
+  dm->addMotor(0x01, 0x11, 4310);
+  dm->addMotor(0x02, 0x12, 4310);
 
   dm->enable(0x01);
   std::cout << "Motor 1 position: " << dm->motors[0x01]->state.q << std::endl;
