@@ -4,7 +4,6 @@
 #include "SerialPort.h"
 #include <vector>
 #include <unordered_map>
-#include <iomanip>
 
 namespace damiao
 {
@@ -54,11 +53,12 @@ typedef struct
 #pragma pack()
 typedef struct 
 {
-  float Q_MIN = -12.5;
-  float Q_MAX = 12.5;
-  float DQ_MAX = 30;
-  float TAU_MAX = 10;
-
+  struct{
+    float Q_MIN = -12.5;
+    float Q_MAX = 12.5;
+    float DQ_MAX;
+    float TAU_MAX;
+  } params;
   struct {
     float kp;
     float kd;
@@ -66,7 +66,6 @@ typedef struct
     float dq;
     float tau;
   } cmd;
-
   struct {
     float q;
     float dq;
@@ -74,11 +73,11 @@ typedef struct
     float t_mos;
     float t_rotor;
   } state;
-
 } MotorParam;
 
+
 /**
- * @brief Damiao Technology DM-J4310-2EC Motor Control
+ * @brief Damiao Technology DM-J4310-2EC and DM-J4340-2EC Motor Control
  * 
  * Communication using USB to CAN, virtual serial port on Linux
  */
@@ -97,7 +96,6 @@ public:
   void disbale(id_t id) { control_cmd(id, 0xFD); }
   void zero_position(id_t id) { control_cmd(id, 0xFE); }
   void reset(id_t id) { control_cmd(id, 0xFB); }
-
   std::unordered_map<id_t, std::shared_ptr<MotorParam>> motors;
 
   /**
@@ -106,9 +104,17 @@ public:
    * Implement different MOTOR_ID and MASTER_ID pointing to the same MotorParam
    * Make sure MOTOR_ID and MASTER_ID are not used
    */
-  void addMotor(id_t MOTOR_ID, id_t MASTER_ID)
+  void addMotor(id_t MOTOR_ID, id_t MASTER_ID, uint MOTOR_TYPE)
   {
     motors.insert({MOTOR_ID, std::make_shared<MotorParam>()});
+    if (MOTOR_TYPE == 4310){
+      motors[MOTOR_ID]->params.DQ_MAX = 30;
+      motors[MOTOR_ID]->params.TAU_MAX = 10;
+    }
+    else if (MOTOR_TYPE == 4340){
+      motors[MOTOR_ID]->params.DQ_MAX = 10;
+      motors[MOTOR_ID]->params.TAU_MAX = 28;
+    }
     motors[MASTER_ID] = motors[MOTOR_ID];
   }
 
@@ -126,11 +132,8 @@ public:
     {
       throw std::runtime_error("Motor id not found");
     }
-
     auto& m = motors[id];
-
     m->cmd = {kp, kd, q, dq, tau}; // Save control command
-
 
     // according to the manual, having kd=0 while controlling position will cause oscillation
     // setting kd serves as a damping factor
@@ -139,12 +142,11 @@ public:
       std::cout << "kd should not be 0 when controlling position!" << std::endl;
       return;
     }
-
     uint16_t kp_uint = float_to_uint(kp, 0, 500, 12);
     uint16_t kd_uint = float_to_uint(kd, 0, 5, 12);
-    uint16_t q_uint = float_to_uint(q, m->Q_MIN, m->Q_MAX, 16);
-    uint16_t dq_uint = float_to_uint(dq, -m->DQ_MAX, m->DQ_MAX, 12);
-    uint16_t tau_uint = float_to_uint(tau, -m->TAU_MAX, m->TAU_MAX, 12);
+    uint16_t q_uint = float_to_uint(q, m->params.Q_MIN, m->params.Q_MAX, 16);
+    uint16_t dq_uint = float_to_uint(dq, -m->params.DQ_MAX, m->params.DQ_MAX, 12);
+    uint16_t tau_uint = float_to_uint(tau, -m->params.TAU_MAX, m->params.TAU_MAX, 12);
 
     std::array<uint8_t, 8> data_buf;
     data_buf[0] = (q_uint >> 8) & 0xff;                             // p_des
@@ -155,13 +157,6 @@ public:
     data_buf[5] = kd_uint >> 4;                                     // kd
     data_buf[6] = ((kd_uint & 0xf) << 4) | ((tau_uint >> 8) & 0xf); // kd + t_ff
     data_buf[7] = tau_uint & 0xff;                                  // t_ff
-
-    std::cout << "Data Buffer: ";
-    for (const auto& data : data_buf) {
-      std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data) << " ";
-    }
-    std::cout << std::endl;
-
     send_data.modify(id, data_buf.data());
     serial_->send((uint8_t*)&send_data, sizeof(CAN_Send_Frame));
     this->recv();
@@ -181,7 +176,6 @@ public:
       };
 
       auto & data = recv_data.canData;
-
       uint16_t q_uint = (uint16_t(data[1]) << 8) | data[2];
       uint16_t dq_uint = (uint16_t(data[3]) << 4) | (data[4] >> 4);
       uint16_t tau_uint = (uint16_t(data[4] & 0xf) << 8) | data[5];
@@ -193,11 +187,10 @@ public:
         std::cout << "Unknown motor id: " << std::hex << recv_data.CANID << std::endl;
         return;
       }
-
       auto & m = motors[recv_data.CANID];
-      m->state.q = uint_to_float(q_uint, m->Q_MIN, m->Q_MAX, 16);
-      m->state.dq = uint_to_float(dq_uint, -m->DQ_MAX, m->DQ_MAX, 12);
-      m->state.tau = uint_to_float(tau_uint, -m->TAU_MAX, m->TAU_MAX, 12);
+      m->state.q = uint_to_float(q_uint, m->params.Q_MIN, m->params.Q_MAX, 16);
+      m->state.dq = uint_to_float(dq_uint, -m->params.DQ_MAX, m->params.DQ_MAX, 12);
+      m->state.tau = uint_to_float(tau_uint, -m->params.TAU_MAX, m->params.TAU_MAX, 12);
       m->state.t_mos = t_mos;
       m->state.t_rotor = t_rotor;
       return;
