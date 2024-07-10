@@ -8,14 +8,23 @@ KD_MIN = 0.0
 KD_MAX = 5.0
 
 class Motor:
-    def __init__(self, motor_id):
+    def __init__(self, motor_id, motor_type):
         self.motor_id = motor_id
-        self.params = {
-            'Q_MIN': -12.5,
-            'Q_MAX': 12.5,
-            'DQ_MAX': 10.0,
-            'TAU_MAX': 28.0
-        }
+        if motor_type == "4310":
+            self.params = {
+                'Q_MIN': -12.5,
+                'Q_MAX': 12.5,
+                'DQ_MAX': 30.0, 
+                'TAU_MAX': 10.0
+            }
+        elif motor_type == "4340":
+            self.params = {
+                'Q_MIN': -12.5,
+                'Q_MAX': 12.5,
+                'DQ_MAX':10.0,
+                'TAU_MAX': 28.0
+            }
+
         self.cmd = {
             'kp': None,
             'kd': None,
@@ -47,6 +56,7 @@ class CAN_Send_Frame:
     crc = 0  # Unparsed, any value
 
     def __init__(self) -> None:
+        # TODO: Implement a proper serial packing and unpacking
         self.send_data = np.array([ 0x55, 0xAA,  # 0-1 Frame header 
                             0x1e,        # 2 Frame length
                             0x01,        # 3 Command 1: Forward CAN data frame 2: PC and device handshake, device feedback OK 3: Non-feedback CAN forwarding, do not feedback send status
@@ -61,7 +71,7 @@ class CAN_Send_Frame:
                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, # 21 data buf
                             0x88], # 29 crc, anything works for now
                             np.uint8)
-    
+
     def modify(self, id, data):
         self.send_data[13] = id
         self.send_data[21:29] = data
@@ -106,8 +116,8 @@ def control_motor(motor_id, send_frame, kp, kd, q, dq, tau):
     ser.flush()
     recv_data()
 
-def add_motor(motor_id, master_id):
-    motor = Motor(motor_id)
+def add_motor(motor_id, master_id, motor_type):
+    motor = Motor(motor_id, motor_type)
     motor_list[motor_id] = motor
     motor_list[master_id] = motor
 
@@ -135,27 +145,30 @@ def recv_data():
     global ser
     fds = [ser]
     for ser in fds:
-        # TODO: struct unpack?
+        # TODO: Implement a proper serial packing and unpacking
+        # Currently just read by bytes, may be incorrect for values that spans multiple bytes
         data = np.array(list(ser.read(ser.in_waiting)), np.uint8)
         for i in range(0, len(data), 16):
             data_arr = (data[i:i+16])
             if data_arr[0] == np.uint8(0xAA): 
                 if data_arr[1] == np.uint8(0x11) and data_arr[-1] == np.uint8(0x55):
-                    can_id = data_arr[7] # TODO
+                    master_id = data_arr[7] # TODO may be problematic
                     data_buf = data_arr[7:15]
+                    print(f"Received for {master_id}: {data_buf} ")
+
                     q_uint = (data_buf[1] << 8) | data_buf[2]
                     dq_uint = (data_buf[3] << 4) | (data_buf[4] >> 4)
                     tau_uint = (data_buf[4] & 0xf) << 8 | data_buf[5]
                     t_mos = data_buf[6]
                     t_rotor = data_buf[7]
-                    q = uint_to_float(q_uint, motor_list[can_id].params['Q_MIN'], motor_list[can_id].params['Q_MAX'], 16)
-                    dq = uint_to_float(dq_uint, -motor_list[can_id].params['DQ_MAX'], motor_list[can_id].params['DQ_MAX'], 12)
-                    tau = uint_to_float(tau_uint, -motor_list[can_id].params["TAU_MAX"], motor_list[can_id].params["TAU_MAX"], 12)
-                    motor_list[can_id].state['q'] = q
-                    motor_list[can_id].state['dq'] = dq
-                    motor_list[can_id].state['tau'] = tau
-                    motor_list[can_id].state['t_mos'] = t_mos
-                    motor_list[can_id].state['t_rotor'] = t_rotor
+                    q = uint_to_float(q_uint, motor_list[master_id].params['Q_MIN'], motor_list[master_id].params['Q_MAX'], 16)
+                    dq = uint_to_float(dq_uint, -motor_list[master_id].params['DQ_MAX'], motor_list[master_id].params['DQ_MAX'], 12)
+                    tau = uint_to_float(tau_uint, -motor_list[master_id].params["TAU_MAX"], motor_list[master_id].params["TAU_MAX"], 12)
+                    motor_list[master_id].state['q'] = q
+                    motor_list[master_id].state['dq'] = dq
+                    motor_list[master_id].state['tau'] = tau
+                    motor_list[master_id].state['t_mos'] = t_mos
+                    motor_list[master_id].state['t_rotor'] = t_rotor
 
 if __name__ == "__main__":  
     np.set_printoptions(formatter={'int':hex})
@@ -168,14 +181,15 @@ if __name__ == "__main__":
     # ser.flush()
 
     motor_list = {}
-    motor_ids = [(np.uint8(0x01), np.uint8(0x11)),
-                (np.uint8(0x02), np.uint8(0x12))]
+    motor_ids = [(np.uint8(0x0A), np.uint8(0x1A), "4340"),
+                (np.uint8(0x0B), np.uint8(0x1B), "4340")]
 
-    for motor_id, recv_id in motor_ids:
-        add_motor(motor_id, recv_id)
-        enable(motor_id, CAN_Send_Frame())
-    
+    send_frame = CAN_Send_Frame()
+    for motor_id, master_id, motor_type in motor_ids:
+        add_motor(motor_id, master_id, motor_type)
+        enable(motor_id, send_frame)
+
     while True:
-        control_motor(motor_ids[0][0], CAN_Send_Frame(), 0, 0, 0, 0, 0)
+        control_motor(motor_ids[0][0], send_frame, 0, 0, 0, 0, 0)
         q1 = motor_list[motor_ids[0][0]].state['q']
-        control_motor(motor_ids[1][0], CAN_Send_Frame(), 50, 1, q1, 0, 0)
+        control_motor(motor_ids[1][0], send_frame, 50, 1, q1, 0, 0)
